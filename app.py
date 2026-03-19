@@ -2,7 +2,11 @@ import streamlit as st
 import asyncio
 from auditor_logic import FiisualAuditor
 import pandas as pd
+import os
 
+# 檢查是否在 Streamlit Cloud 環境中 (這段建議放在 app.py 最上方)
+if not os.path.exists("/home/adminuser/.cache/ms-playwright"):
+    os.system("playwright install chromium")
 st.set_page_config(page_title="Fiisual QA Support", layout="wide")
 st.title("🎯 Fiisual 網頁品質自動化檢測")
 
