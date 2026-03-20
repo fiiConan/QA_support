@@ -14,7 +14,26 @@ def has_accessible_name(tag):
     return text_ok or aria_ok or title_ok or img_alt_ok
 
 
-def run_accessibility_checks(soup, report):
+def describe_input_issue(inp):
+    input_type = inp.get("type", "text")
+    name = inp.get("name", "").strip()
+    placeholder = inp.get("placeholder", "").strip()
+    input_id = inp.get("id", "").strip()
+
+    parts = [f"輸入欄位 type={input_type}"]
+
+    if name:
+        parts.append(f"name={name}")
+    if input_id:
+        parts.append(f"id={input_id}")
+    if placeholder:
+        parts.append(f"placeholder={placeholder}")
+
+    desc = "；".join(parts)
+    return f"{desc}；缺少對應 label；位置：{describe_context(inp)}"
+
+
+def run_accessibility_checks(soup, report, page_url=""):
     html_tag = soup.find("html")
     html_lang_ok = (
         html_tag is not None
@@ -32,16 +51,15 @@ def run_accessibility_checks(soup, report):
     for tag in interactive_tags:
         if not has_accessible_name(tag):
             bad_interactive.append(
-                f"{describe_element(tag)}；位置：{describe_context(tag)}"
+                f"{describe_element(tag, page_url)}；位置：{describe_context(tag)}"
             )
 
-    interactive_ok = len(bad_interactive) == 0
     log_result(
         report,
         "Accessibility",
         "<button> & <a> 標籤有 aria-label",
         "critical",
-        interactive_ok,
+        len(bad_interactive) == 0,
         f"未通過數量: {len(bad_interactive)}",
         bad_interactive
     )
@@ -66,17 +84,14 @@ def run_accessibility_checks(soup, report):
         wrapped_label = inp.find_parent("label") is not None
 
         if not (has_for_label or wrapped_label or aria_label or aria_labelledby):
-            bad_inputs.append(
-                f"{describe_element(inp)}；位置：{describe_context(inp)}"
-            )
+            bad_inputs.append(describe_input_issue(inp))
 
-    inputs_ok = len(bad_inputs) == 0
     log_result(
         report,
         "Accessibility",
         "<input> 標籤有對應的 label",
         "critical",
-        inputs_ok,
+        len(bad_inputs) == 0,
         f"未通過 {len(bad_inputs)} 個",
         bad_inputs
     )

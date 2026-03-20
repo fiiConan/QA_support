@@ -20,7 +20,7 @@ if run_btn and url:
     st.success("稽核完成！")
 
     st.subheader("檢測結果")
-    st.dataframe(report, use_container_width=True)
+    st.dataframe(report, width="stretch")
 
     st.subheader("分類檢視")
     grouped = {}
@@ -36,18 +36,24 @@ if run_btn and url:
                     st.caption(i["備註"])
 
                 if i.get("問題列表"):
-                    st.markdown("**問題位置：**")
-                    for idx, issue in enumerate(i["問題列表"], start=1):
+                    issues = i["問題列表"]
+                    st.markdown(f"**問題位置（共 {len(issues)} 筆）：**")
+
+                    preview_count = 5
+                    for idx, issue in enumerate(issues[:preview_count], start=1):
                         st.markdown(f"{idx}. {issue}")
+
+                    if len(issues) > preview_count:
+                        with st.expander(f"查看其餘 {len(issues) - preview_count} 筆"):
+                            for idx, issue in enumerate(issues[preview_count:], start=preview_count + 1):
+                                st.markdown(f"{idx}. {issue}")
 
                 st.divider()
 
     st.subheader("Viewport Screenshots")
-
     if os.path.exists("outputs"):
         images = [f for f in os.listdir("outputs") if f.endswith(".png")]
         cols = st.columns(3)
-
         for i, img in enumerate(images):
             with cols[i % 3]:
                 st.image(f"outputs/{img}", caption=img)

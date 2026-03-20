@@ -1,13 +1,14 @@
 from bs4 import Tag
+from urllib.parse import urljoin
+import re
 
 
 def build_status_text(status):
-    status_map = {
+    return {
         True: "✅ 通過",
         False: "❌ 待修復",
         None: "⏭ 未執行",
-    }
-    return status_map.get(status, "⏭ 未執行")
+    }.get(status, "⏭ 未執行")
 
 
 def log_result(report, block, item, severity, status, detail="", issues=None):
@@ -28,27 +29,71 @@ def safe_text(text, max_len=40):
     return text[:max_len]
 
 
-def describe_element(tag: Tag):
+def extract_image_url(tag: Tag, page_url: str = ""):
+    if tag is None:
+        return ""
+
+    candidates = [
+        tag.get("src", ""),
+        tag.get("data-src", ""),
+        tag.get("data-lazy", ""),
+        tag.get("data-original", ""),
+        tag.get("data-image", ""),
+        tag.get("data-fallback-src", ""),
+    ]
+
+    srcset = tag.get("srcset", "").strip()
+    if srcset:
+        first_srcset = srcset.split(",")[0].strip().split(" ")[0].strip()
+        if first_srcset:
+            candidates.append(first_srcset)
+
+    for candidate in candidates:
+        if candidate and candidate.strip():
+            return urljoin(page_url, candidate.strip()) if page_url else candidate.strip()
+
+    parent = tag.parent
+    if parent and getattr(parent, "name", None) == "picture":
+        source = parent.find("source")
+        if source:
+            source_srcset = source.get("srcset", "").strip()
+            if source_srcset:
+                first_source = source_srcset.split(",")[0].strip().split(" ")[0].strip()
+                if first_source:
+                    return urljoin(page_url, first_source) if page_url else first_source
+
+    style = tag.get("style", "")
+    if "background-image" in style:
+        match = re.search(r'url\(["\']?(.*?)["\']?\)', style)
+        if match:
+            bg_url = match.group(1).strip()
+            return urljoin(page_url, bg_url) if page_url else bg_url
+
+    return ""
+
+
+def describe_element(tag: Tag, page_url=""):
     if tag is None:
         return "未知元素"
 
     tag_name = tag.name or "未知標籤"
-    text = safe_text(tag.get_text(" ", strip=True))
-    element_id = tag.get("id", "")
-    classes = " ".join(tag.get("class", [])) if tag.get("class") else ""
 
     if tag_name == "img":
-        src = tag.get("src", "") or tag.get("data-src", "") or "未知圖片"
-        alt = tag.get("alt", "")
-        return f"圖片：{src}；alt={'有值' if alt.strip() else '缺少'}"
+        src = extract_image_url(tag, page_url) or "未知圖片"
+        alt = tag.get("alt", "").strip()
+        return f"圖片：{src}（{'有 alt' if alt else '缺少 alt'}）"
 
     if tag_name == "a":
-        href = tag.get("href", "") or "無 href"
+        href = tag.get("href", "").strip() or "無 href"
+        full_href = urljoin(page_url, href) if page_url and href != "無 href" else href
+        text = safe_text(tag.get_text(" ", strip=True), 60)
+
         if text:
-            return f"連結：{text}（{href}）"
-        return f"連結：{href}（無可讀文字）"
+            return f"連結：{text}（{full_href}）"
+        return f"連結：{full_href}（無可讀文字）"
 
     if tag_name == "button":
+        text = safe_text(tag.get_text(" ", strip=True), 60)
         aria = tag.get("aria-label", "").strip()
         if text:
             return f"按鈕：{text}"
@@ -67,14 +112,7 @@ def describe_element(tag: Tag):
             desc += f" placeholder={placeholder}"
         return desc
 
-    desc = f"<{tag_name}>"
-    if text:
-        desc += f" 內容：{text}"
-    if element_id:
-        desc += f" id={element_id}"
-    if classes:
-        desc += f" class={classes}"
-    return desc
+    return f"<{tag_name}>"
 
 
 def describe_context(tag: Tag):
@@ -82,7 +120,9 @@ def describe_context(tag: Tag):
         return "未知區塊"
 
     parent = tag.parent if hasattr(tag, "parent") else None
-    while parent and getattr(parent, "name", None) not in {"section", "article", "main", "header", "footer", "nav", "div", "form"}:
+    while parent and getattr(parent, "name", None) not in {
+        "section", "article", "main", "header", "footer", "nav", "div", "form"
+    }:
         parent = parent.parent if hasattr(parent, "parent") else None
 
     if parent:
@@ -98,4 +138,4 @@ def describe_context(tag: Tag):
         if parent_class:
             return f"區塊 class={parent_class}"
 
-    return "頁面區塊未命名"
+    return "頁面區塊"

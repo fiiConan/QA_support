@@ -1,7 +1,12 @@
 import requests
 from urllib.parse import urljoin, urlparse
 
-from checkers.helpers import log_result, describe_element, describe_context
+from checkers.helpers import (
+    log_result,
+    describe_element,
+    describe_context,
+    extract_image_url,
+)
 
 
 def is_heading_order_valid(soup):
@@ -63,9 +68,9 @@ def check_og_image_accessible(soup, headers):
         return False, str(e)
 
 
-def check_http_status(response, report):
-    ok = response.status_code == 200
-    log_result(report, "SEO", "HTTP Status Code 為 200", "critical", ok, f"status={response.status_code}")
+def check_http_status(status_code, report):
+    ok = status_code == 200
+    log_result(report, "SEO", "HTTP Status Code 為 200", "critical", ok, f"status={status_code}")
 
 
 def check_canonical(soup, page_url, report):
@@ -120,7 +125,9 @@ def check_sitemap(base_url, headers, report):
     try:
         response = requests.get(sitemap_url, headers=headers, timeout=10, allow_redirects=True)
         content_type = response.headers.get("Content-Type", "")
-        ok = response.status_code == 200 and ("xml" in content_type.lower() or response.text.strip().startswith("<?xml"))
+        ok = response.status_code == 200 and (
+            "xml" in content_type.lower() or response.text.strip().startswith("<?xml")
+        )
         log_result(report, "SEO", "sitemap.xml 可存取", "high", ok, f"status={response.status_code}；{sitemap_url}")
     except Exception as e:
         log_result(report, "SEO", "sitemap.xml 可存取", "high", False, str(e))
@@ -135,7 +142,15 @@ def check_robots_txt(base_url, headers, report):
 
         if ok and "disallow: /" in response.text.lower():
             log_result(report, "SEO", "robots.txt 可存取", "high", True, detail)
-            log_result(report, "SEO", "robots.txt 未全站封鎖", "critical", False, "發現 Disallow: /", ["robots.txt 含有 Disallow: /"])
+            log_result(
+                report,
+                "SEO",
+                "robots.txt 未全站封鎖",
+                "critical",
+                False,
+                "發現 Disallow: /",
+                ["robots.txt 含有 Disallow: /"]
+            )
         else:
             log_result(report, "SEO", "robots.txt 可存取", "high", ok, detail)
             log_result(report, "SEO", "robots.txt 未全站封鎖", "critical", True if ok else None, "")
@@ -160,7 +175,13 @@ def check_internal_links(soup, page_url, report):
 
     for a in links:
         href = a.get("href", "").strip()
-        if not href or href.startswith("#") or href.startswith("javascript:") or href.startswith("mailto:") or href.startswith("tel:"):
+        if (
+            not href
+            or href.startswith("#")
+            or href.startswith("javascript:")
+            or href.startswith("mailto:")
+            or href.startswith("tel:")
+        ):
             continue
 
         full_url = urljoin(page_url, href)
@@ -171,9 +192,10 @@ def check_internal_links(soup, page_url, report):
             anchor_text = a.get_text(strip=True)
             aria_label = a.get("aria-label", "").strip()
             title_attr = a.get("title", "").strip()
+
             if not (anchor_text or aria_label or title_attr):
                 empty_anchor_issues.append(
-                    f"{describe_element(a)}；位置：{describe_context(a)}"
+                    f"{describe_element(a, page_url)}；位置：{describe_context(a)}"
                 )
 
     log_result(
@@ -230,15 +252,16 @@ def check_image_lazy_loading(soup, report):
     log_result(report, "SEO", "圖片使用 lazy loading", "low", ok, f"lazy={lazy_count} / total={len(imgs)}")
 
 
-def check_img_alt(soup, report):
+def check_img_alt(soup, report, page_url):
     imgs = soup.find_all("img")
     missing_alt = []
 
     for img in imgs:
-        if not img.has_attr("alt") or not img.get("alt", "").strip():
-            missing_alt.append(
-                f"{describe_element(img)}；位置：{describe_context(img)}"
-            )
+        alt = img.get("alt", "").strip()
+        if not alt:
+            src = extract_image_url(img, page_url) or "未知圖片"
+            context = describe_context(img)
+            missing_alt.append(f"圖片：{src}；位置：{context}")
 
     log_result(
         report,
@@ -251,13 +274,13 @@ def check_img_alt(soup, report):
     )
 
 
-def run_seo_checks(soup, report, page_url, response, headers):
+def run_seo_checks(soup, report, page_url, status_code, headers):
     h1s = soup.find_all("h1")
     h2s = soup.find_all("h2")
     h3s = soup.find_all("h3")
     headings = h1s + h2s + h3s
 
-    check_http_status(response, report)
+    check_http_status(status_code, report)
 
     log_result(report, "SEO", "H1 存在", "critical", len(h1s) > 0)
     log_result(report, "SEO", "H1 只有一個", "high", len(h1s) == 1, f"偵測到 {len(h1s)} 個")
@@ -327,7 +350,7 @@ def run_seo_checks(soup, report, page_url, response, headers):
     og_image_ok, og_image_detail = check_og_image_accessible(soup, headers)
     log_result(report, "SEO", "OG Image 存在且可存取（Http 200）", "medium", og_image_ok, og_image_detail)
 
-    check_img_alt(soup, report)
+    check_img_alt(soup, report, page_url)
 
     body_text = soup.get_text(separator=" ", strip=True)
     text_len = len(body_text)

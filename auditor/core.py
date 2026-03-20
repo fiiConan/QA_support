@@ -1,8 +1,7 @@
 import os
 import json
-import requests
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
 from checkers.seo import run_seo_checks
 from checkers.accessibility import run_accessibility_checks
@@ -18,29 +17,69 @@ class FiisualAuditor:
             "User-Agent": "Mozilla/5.0"
         }
         self.report = []
-        self.response = None
 
-    def fetch_soup(self):
-        self.response = requests.get(self.url, headers=self.headers, timeout=15, allow_redirects=True)
-        self.response.raise_for_status()
-        return BeautifulSoup(self.response.text, "lxml")
-
-    def run_static_checks(self):
-        soup = self.fetch_soup()
-        run_seo_checks(
-            soup=soup,
-            report=self.report,
-            page_url=self.url,
-            response=self.response,
-            headers=self.headers
+    async def fetch_rendered_page(self, browser):
+        context = await browser.new_context(
+            viewport={"width": 1440, "height": 900},
+            is_mobile=False,
+            user_agent=self.headers["User-Agent"],
         )
-        run_accessibility_checks(soup, self.report)
+        page = await context.new_page()
 
-    async def run_dynamic_checks(self):
+        try:
+            response = None
+
+            try:
+                response = await page.goto(
+                    self.url,
+                    wait_until="domcontentloaded",
+                    timeout=30000
+                )
+            except PlaywrightTimeoutError:
+                # 至少保留頁面現況，不直接炸掉
+                pass
+
+            # 額外等一下讓前端 JS render
+            await page.wait_for_timeout(3000)
+
+            html = await page.content()
+            final_url = page.url
+            status_code = response.status if response else 200
+
+            return {
+                "html": html,
+                "final_url": final_url,
+                "status_code": status_code,
+            }
+        finally:
+            await context.close()
+
+    async def run_full_audit(self):
+        os.makedirs(self.output_dir, exist_ok=True)
+
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
+
             try:
+                rendered = await self.fetch_rendered_page(browser)
+                soup = BeautifulSoup(rendered["html"], "lxml")
+
+                run_seo_checks(
+                    soup=soup,
+                    report=self.report,
+                    page_url=rendered["final_url"],
+                    status_code=rendered["status_code"],
+                    headers=self.headers,
+                )
+
+                run_accessibility_checks(
+                    soup,
+                    self.report,
+                    rendered["final_url"]
+                )
+
                 await run_performance_checks(browser, self.url, self.report)
+
                 await run_viewport_checks(
                     playwright=p,
                     browser=browser,
@@ -48,14 +87,11 @@ class FiisualAuditor:
                     report=self.report,
                     output_dir=self.output_dir
                 )
+
+                return self.report
+
             finally:
                 await browser.close()
-
-    async def run_full_audit(self):
-        os.makedirs(self.output_dir, exist_ok=True)
-        self.run_static_checks()
-        await self.run_dynamic_checks()
-        return self.report
 
     def save_report(self, filename="audit_report.json"):
         path = os.path.join(self.output_dir, filename)
