@@ -3,8 +3,6 @@ import json
 import requests
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
-from checkers.performance import run_performance_checks
-from checkers.viewport import run_viewport_checks
 
 from checkers.seo import run_seo_checks
 from checkers.accessibility import run_accessibility_checks
@@ -20,31 +18,38 @@ class FiisualAuditor:
             "User-Agent": "Mozilla/5.0"
         }
         self.report = []
+        self.response = None
 
     def fetch_soup(self):
-        response = requests.get(self.url, headers=self.headers, timeout=15)
-        response.raise_for_status()
-        return BeautifulSoup(response.text, "lxml")
+        self.response = requests.get(self.url, headers=self.headers, timeout=15, allow_redirects=True)
+        self.response.raise_for_status()
+        return BeautifulSoup(self.response.text, "lxml")
 
     def run_static_checks(self):
         soup = self.fetch_soup()
-        run_seo_checks(soup, self.report)
+        run_seo_checks(
+            soup=soup,
+            report=self.report,
+            page_url=self.url,
+            response=self.response,
+            headers=self.headers
+        )
         run_accessibility_checks(soup, self.report)
 
     async def run_dynamic_checks(self):
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-
-            await run_performance_checks(browser, self.url, self.report)
-            await run_viewport_checks(
-                playwright=p,
-                browser=browser,
-                url=self.url,
-                report=self.report,
-                output_dir=self.output_dir
-            )
-
-            await browser.close()
+            try:
+                await run_performance_checks(browser, self.url, self.report)
+                await run_viewport_checks(
+                    playwright=p,
+                    browser=browser,
+                    url=self.url,
+                    report=self.report,
+                    output_dir=self.output_dir
+                )
+            finally:
+                await browser.close()
 
     async def run_full_audit(self):
         os.makedirs(self.output_dir, exist_ok=True)
